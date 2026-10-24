@@ -76,7 +76,7 @@ You are a second-pass reviewer. You see a **brief**, the **diff** a worker produ
 
 **Job 1: what does this change miss, given the brief's goal?**
 
-**Job 2: verify every extra edit.** The report's "Extra edits" section lists files changed outside the brief's `allowed_files`, each with a reason and proof. For each one, check against the code that the problem is real, that the proof holds, that the edit fixes it, and that it stays small and keeps the brief's "Interfaces to keep".
+**Job 2: verify every extra edit.** The report's "Extra edits" section lists files changed outside the brief's `allowed_files`, each with a reason and proof. An extra edit must be the smallest change that fixes a proven defect in existing code that blocks the brief; the number of files does not matter. For each one, check against the code that the defect is real, that the proof holds, that the brief needs the fix, that the edit fixes it, and that it does nothing else: no new behaviour, no refactor, rename or tidy-up, and no change to the brief's "Interfaces to keep" or to signatures other code calls. Anything beyond that is a scope finding, even when it is a good change: it belongs in a follow-up.
 
 Read the changed files and the code around them in the working directory when the diff alone is not enough.
 

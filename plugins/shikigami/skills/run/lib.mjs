@@ -2,7 +2,7 @@
 //   node lib.mjs brief <brief.md>                          check the brief, print id and title as shell vars
 //   node lib.mjs lines <brief.md> <allowed|acceptance>     print one header list item per line
 //   node lib.mjs owned <briefs-dir> <brief.md>             globs owned by the other briefs, as "glob<TAB>brief id"
-//   node lib.mjs scope <brief.md> <changed.txt> <report.md> <briefs-dir> <max> <extra-out>
+//   node lib.mjs scope <brief.md> <changed.txt> <report.md> <briefs-dir> <off-limits globs> <extra-out>
 //                                                          file-boundary gate with declared extra edits; exit 1 if it fails
 //   node lib.mjs events <events.jsonl> <text-out> <err-out>   session id, last text, error from `opencode run --format json`
 //   node lib.mjs session <export.json>                     token, context and outcome figures from `opencode session export`
@@ -98,7 +98,7 @@ function otherBriefs(dir, current) {
   return out;
 }
 
-function scope(briefFile, changedFile, reportFile, briefsDir, max, extraOut) {
+function scope(briefFile, changedFile, reportFile, briefsDir, offLimits, extraOut) {
   const own = parseBrief(briefFile).allowed.map(globToRegex);
   const others = otherBriefs(briefsDir, briefFile);
   const changed = read(changedFile).split("\n").filter(Boolean).map((f) => f.replace(/\\/g, "/"));
@@ -109,15 +109,17 @@ function scope(briefFile, changedFile, reportFile, briefsDir, max, extraOut) {
     .map((f) => ({ f, by: others.find((o) => o.res.some((r) => r.test(f)))?.id }))
     .filter((x) => x.by);
   const extra = outside.filter((f) => declared.has(f));
-  const tooMany = extra.length > Number(max);
+  // Off-limits files (dependencies, CI, build config, migrations) may change only when the brief lists them.
+  const offRes = String(offLimits || "").split(/\s+/).filter(Boolean).map(globToRegex);
+  const offHits = extra.filter((f) => offRes.some((r) => r.test(f)));
   fs.writeFileSync(extraOut, extra.join("\n"));
   console.log([
     `SC_EXTRA=${extra.length}`,
     `SC_UNDECLARED=${sh(undeclared.join(", "))}`,
     `SC_OWNED=${sh(owned.map((x) => `${x.f} (owned by brief ${x.by})`).join(", "))}`,
-    `SC_TOOMANY=${tooMany ? 1 : 0}`,
+    `SC_PROTECTED=${sh(offHits.join(", "))}`,
   ].join("\n"));
-  process.exit(undeclared.length || owned.length || tooMany ? 1 : 0);
+  process.exit(undeclared.length || owned.length || offHits.length ? 1 : 0);
 }
 
 function unquote(s) {
@@ -199,10 +201,18 @@ function findings(file, fixOut, extraFile) {
     const m = line.match(FINDING);
     if (m) { found[m[1].toLowerCase()].push(m[2].trim()); continue; }
     const ok = line.match(SCOPE_OK);
-    if (ok) scopeOk.push(firstPath(ok[1].trim().split(/\s+/)[0] || ""));
+    if (ok) scopeOk.push(ok[1].trim());
   }
-  const extra = read(extraFile).split("\n").filter(Boolean);
-  const judged = new Set([...scopeOk, ...found.scope.map((f) => firstPath(f))]);
+  const extra = read(extraFile).split("\n").map((f) => f.trim()).filter(Boolean);
+  // The extra-edit file a verdict is about: the longest declared path its text contains, so "pkg.json:12",
+  // "**a.ts**" or a path with spaces still match. A verdict naming no declared file keeps its own first path.
+  const fileOf = (text) => {
+    const t = text.replace(/\\/g, "/");
+    return extra.filter((f) => t.includes(f)).sort((a, b) => b.length - a.length)[0]
+      || firstPath(text).replace(/:\d+(?::\d+)?$/, "");
+  };
+  const rejected = [...new Set(found.scope.map(fileOf).filter(Boolean))];
+  const judged = new Set([...scopeOk.map(fileOf), ...rejected]);
   const unverified = extra.filter((f) => !judged.has(f));
   const none = /NO FINDINGS/i.test(src);
   fs.writeFileSync(fixOut, [
@@ -212,6 +222,7 @@ function findings(file, fixOut, extraFile) {
   console.log([
     `FD_INSIDE=${found.inside.length}`, `FD_OUTSIDE=${found.outside.length}`, `FD_SCOPE=${found.scope.length}`,
     `FD_UNVERIFIED=${sh(unverified.join(", "))}`,
+    `FD_SCOPE_FILES=${sh(rejected.join("\n"))}`,
     `FD_PARSED=${found.inside.length || found.outside.length || found.scope.length || scopeOk.length || none ? 1 : 0}`,
   ].join("\n"));
 }

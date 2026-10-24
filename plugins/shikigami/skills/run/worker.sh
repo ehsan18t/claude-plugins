@@ -220,6 +220,7 @@ cmd_doctor() {
   [ -d "$SKILL_DIR/opencode-agents" ] || problems+=("missing $SKILL_DIR/opencode-agents")
   if [ ${#problems[@]} -eq 0 ]; then
     sync_agents
+    [ -n "${EXTRA_EDIT_MAX_FILES:-}" ] && echo "note: EXTRA_EDIT_MAX_FILES is no longer used (extra edits are judged by what they are, and EXTRA_EDIT_PROTECTED lists off-limits files); remove it from $USER_CONF or your environment"
     echo "OK (OpenCode $(oc_version); worker $WORKER_MODEL at $WORKER_EFFORT; reviewer $REVIEWER_MODEL at $REVIEWER_EFFORT; black-box tester ${TEST_WRITER}; max $MAX_PARALLEL parallel${AGENT_OVERRIDES:+; your agent files:$AGENT_OVERRIDES})"
   else
     printf 'PROBLEM: %s\n' "${problems[@]}"
@@ -235,6 +236,7 @@ finish() {
   case "$result" in PASS) code=0 ;; FAIL) code=1 ;; STOPPED) code=2 ;; *) code=3 ;; esac
   dur=$(( $(date +%s) - START ))
   stop_tester
+  [ "${FLAG_PENDING:-}" = all ] && { FLAG_PENDING=""; flag_rejected_extra all; }
   if [ "$result" != ERROR ] && [ -s "${REPORT:-/nonexistent}" ]; then
     # The latest round's report is the worker's current view; earlier rounds may list items it has since fixed.
     fu="$(lib followups "$(native "${ROUND_REPORT:-$REPORT}")" "$(native "${REVIEW:-$REPORT.none}")")"
@@ -278,6 +280,18 @@ finish() {
 }
 
 note() { NOTES="${NOTES:-}- $1\n"; }
+
+# flag_rejected_extra [all]: rejected extra edits still in the change get a flag for Opus; the run is not failed.
+# "all" when the first pass is what stays on the branch, so every rejected edit is still there.
+flag_rejected_extra() {
+  local f left=""
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    if [ "${1:-}" = all ] || tr -d '\r' < "$EXTRA_FILE" | grep -qxF -- "$f"; then left="${left:+$left, }$f"; fi
+  done <<< "${FD_SCOPE_FILES:-}"
+  [ -n "$left" ] && note "FLAG for Opus: the reviewer judged these extra edits not justified and they are still in the change; decide on each before merging (keep, revert, or move to a follow-up): $left"
+  return 0
+}
 
 add_usage() {
   T_INPUT=$(( ${T_INPUT:-0} + SS_INPUT )); T_OUTPUT=$(( ${T_OUTPUT:-0} + SS_OUTPUT ))
@@ -377,16 +391,23 @@ run_gates() {
     return 1
   fi
   vars="$(lib scope "$(native "$BRIEF")" "$(native "$changed")" "$(native "$REPORT")" "$(native "$PLAN_DIR/briefs")" \
-    "$EXTRA_EDIT_MAX_FILES" "$(native "$EXTRA_FILE")")"; rc=$?
+    "$EXTRA_EDIT_PROTECTED" "$(native "$EXTRA_FILE")")"; rc=$?
   [ $rc -le 1 ] && [ -n "$vars" ] || finish ERROR "could not check the file boundary for $BRIEF"
   eval "$vars"
+  # Size of each extra edit, for Opus to judge (information only, never a limit).
+  EXTRA_SIZES=""
+  if [ -s "$EXTRA_FILE" ]; then
+    EXTRA_SIZES="$(tr -d '\r' < "$EXTRA_FILE" | tr '\n' '\0' | xargs -0 git -C "$WT" -c core.quotePath=false diff --cached --no-renames --numstat "$BASE" -- \
+      | awk -F'\t' '{printf "%s%s %s", (NR > 1 ? ", " : ""), $3, ($1 == "-" ? "(binary)" : "+" $1 " -" $2)}')"
+  fi
   if [ $rc -eq 0 ]; then
-    echo "file boundary: PASS${SC_EXTRA:+ ($SC_EXTRA declared extra edits)}" | sed 's/ (0 declared extra edits)//' >> "$GATES_FILE"
+    if [ "${SC_EXTRA:-0}" -gt 0 ]; then echo "file boundary: PASS ($SC_EXTRA declared extra edits: $EXTRA_SIZES)" >> "$GATES_FILE"
+    else echo "file boundary: PASS" >> "$GATES_FILE"; fi
   else
     why=""
     [ -n "$SC_UNDECLARED" ] && why="$why outside allowed_files and not declared under Extra edits: $SC_UNDECLARED;"
     [ -n "$SC_OWNED" ] && why="$why extra edits in another brief's files: $SC_OWNED;"
-    [ "$SC_TOOMANY" = 1 ] && why="$why $SC_EXTRA extra-edit files, more than the limit of $EXTRA_EDIT_MAX_FILES;"
+    [ -n "$SC_PROTECTED" ] && why="$why extra edits in off-limits files (dependencies, CI, build config or migrations change only when the brief lists them in allowed_files): $SC_PROTECTED;"
     why="${why# }"; echo "file boundary: FAIL (${why%;})" >> "$GATES_FILE"; ok=1
   fi
   [ "${1:-}" = boundary-only ] && return $ok
@@ -518,7 +539,7 @@ cmd_run() {
   fi
   start_tester
 
-  run_worker worker "Implement brief $ID of feature $FEATURE. The plan and your brief are attached; copies are in $INPUT_DIR/. Your working directory is a git worktree of the repo. Extra-edit limit: $EXTRA_EDIT_MAX_FILES files outside allowed_files. Files owned by other briefs are listed in $INPUT_DIR/owned-elsewhere.txt. Follow your protocol, write your self-report to $REPORT_NAME at the worktree root, then end."
+  run_worker worker "Implement brief $ID of feature $FEATURE. The plan and your brief are attached; copies are in $INPUT_DIR/. Your working directory is a git worktree of the repo. Files owned by other briefs are listed in $INPUT_DIR/owned-elsewhere.txt. Off-limits for extra edits unless allowed_files lists them: $EXTRA_EDIT_PROTECTED. Follow your protocol, write your self-report to $REPORT_NAME at the worktree root, then end."
   if [ "$ROUND_STATUS" = STOPPED ]; then
     run_gates boundary-only || true
     finish STOPPED "the worker stopped: the brief or plan does not match the code"
@@ -536,7 +557,7 @@ cmd_run() {
   # Second pass: a fresh reviewer looks only for what the change misses, and checks every extra edit.
   git -C "$WT" diff "$BASE" HEAD > "$WT/$INPUT_DIR/change.diff"
   cp "$REPORT" "$WT/$INPUT_DIR/report.md"
-  REVIEW_STATUS=ok; FD_INSIDE=0; FD_OUTSIDE=0; FD_SCOPE=0; FD_UNVERIFIED=""; FD_PARSED=0
+  REVIEW_STATUS=ok; FD_INSIDE=0; FD_OUTSIDE=0; FD_SCOPE=0; FD_UNVERIFIED=""; FD_SCOPE_FILES=""; FD_PARSED=0
   local rmodel="$REVIEWER_MODEL" rmsg="Review the attached diff for brief $ID. Answer one question: what does this change miss, given the goal? Also verify every entry under Extra edits in the attached worker report. Use the output format from your instructions."
   [ -n "$(paused_since "$rmodel")" ] && rmodel="${REVIEWER_FALLBACK_MODEL:-}"
   local reviewed=1
@@ -577,9 +598,12 @@ cmd_run() {
 
   if [ -s "$fixes" ]; then
     FIX_ROUND=1
+    # Until the fix round's result is known, the first pass (with every rejected extra edit) is what stays on the
+    # branch, so finish flags all of them on any early exit (STOPPED, ERROR, gates broken).
+    FLAG_PENDING=all; cp "$EXTRA_FILE" "$RUN_PREFIX-extra-first.txt" 2>/dev/null || : > "$RUN_PREFIX-extra-first.txt"
     run_worker fix "Checks after your first pass found these problems for brief $ID of feature $FEATURE:
 $(cat "$fixes")
-Fix gaps within the discovery rule. For an extra edit marked not justified, either revert it or keep it with better proof under Extra edits. Then write an updated self-report to $REPORT_NAME (STATUS line first, and say for each finding what you did), then end."
+Fix gaps within the discovery rule. For an extra edit marked not justified, revert it and record the problem under Follow-ups instead, unless you can show it is the smallest fix for a proven defect that blocks this brief; then keep it with that proof under Extra edits. Files owned by other briefs are listed in $INPUT_DIR/owned-elsewhere.txt. Off-limits for extra edits unless allowed_files lists them: $EXTRA_EDIT_PROTECTED. Then write an updated self-report to $REPORT_NAME (STATUS line first, and say for each finding what you did), then end."
     if [ "$ROUND_STATUS" = STOPPED ]; then
       git -C "$WT" reset -q --hard HEAD; git -C "$WT" clean -qfd
       finish STOPPED "the worker stopped during the fix round; the first pass is committed on the branch"
@@ -587,6 +611,10 @@ Fix gaps within the discovery rule. For an extra edit marked not justified, eith
     if run_gates; then
       [ $bb_ok -ne 0 ] && { run_blackbox || note "black-box tests still fail after the fix round; check whether the tests or the code are wrong"; }
       git -C "$WT" diff --cached --quiet || commit_wt "$FEATURE/$ID: review fixes"
+      FLAG_PENDING=""; flag_rejected_extra
+      local added
+      added="$(tr -d '\r' < "$EXTRA_FILE" | grep -vxF -f <(tr -d '\r' < "$RUN_PREFIX-extra-first.txt") | paste -sd ',' - | sed 's/,/, /g')"
+      [ -n "$added" ] && note "FLAG for Opus: the fix round added these extra edits, which no reviewer has seen; check each one: $added"
       finish PASS "gates passed; fix round applied"
     fi
     git -C "$WT" reset -q --hard HEAD; git -C "$WT" clean -qfd

@@ -168,7 +168,7 @@ STATUS: DONE
 (write "- none" if you made none)
 
 ## Follow-ups
-- <file or area> | issue: <what is wrong> | proof: <evidence> | suggested fix: <what to change>
+- <file or area> | kind: <refactor, feature, interface, cleanup, bug or plan gap> | issue: <what is wrong> | proof: <evidence> | suggested fix: <what to change>
 (write "- none" if there are none)
 
 ## Self-review
@@ -180,14 +180,15 @@ STATUS: DONE
 Every problem you find takes exactly one of these four routes:
 
 1. **Fix it** when the fix stays inside the brief's `allowed_files` and keeps the interfaces the brief lists: a missing edge case, extra validation, a helper, an extra test. Record it under Discoveries.
-2. **Extra edit** when the fix needs a file outside `allowed_files` and all of these hold:
-   - the problem is real and you can prove it: a failing command and its output, a test, or a file and line;
+2. **Extra edit** when the fix needs a file outside `allowed_files`. An extra edit is **the smallest change that fixes a proven defect in existing code that blocks this brief**. There is no limit on how many files it touches; what counts is what it is. All of these must hold:
+   - the defect is real and you can prove it: a failing command and its output, a test, or a file and line;
+   - your brief cannot pass its acceptance or keep its contract without the fix;
+   - the change only fixes that defect: it adds no new behaviour, does not refactor, rename, reformat or tidy up, and keeps every interface under "Interfaces to keep" and every signature other code calls;
    - the file is not listed in `.shikigami-input/owned-elsewhere.txt` (another brief owns those);
-   - the fix is small and local, and keeps every interface under "Interfaces to keep";
-   - your extra edits stay within the extra-edit limit given in your first message (counted in files).
+   - the file is not off-limits (the list in your first message: dependency manifests and lockfiles, CI and build config, migrations), unless `allowed_files` lists it.
 
-   Record every changed file outside `allowed_files` under Extra edits, one line per file, with why and proof. An extra edit missing from that list fails the gates.
-3. **Follow-up** when the problem is real but does not block your brief and you may not fix it as an extra edit (another brief's file, an interface change, too large, over the limit). Leave the code alone and record it under Follow-ups with proof and a suggested fix. The orchestrator decides what to do with it.
+   Record every changed file outside `allowed_files` under Extra edits, one line per file, with why and proof. An extra edit missing from that list, in another brief's file, or in an off-limits file fails the gates.
+3. **Follow-up** for anything beyond your brief that you noticed but must not do: a refactor, a new feature or behaviour, an interface change, a cleanup, a bug that does not block your brief, a fix in another brief's file or an off-limits file, or a gap in the plan. Leave the code alone and flag it in your report under Follow-ups, with its kind, proof and a suggested fix. Doing it anyway, even when it looks like an improvement, is a scope violation; flagging it is the right move. The orchestrator decides what to do with it.
 4. **Stop** when the problem blocks your brief and no fix or extra edit is allowed. Make no further edits, write the report with `STATUS: STOPPED` as its first line, and explain the mismatch and what you would change under Discoveries.
 
 ## Boundaries

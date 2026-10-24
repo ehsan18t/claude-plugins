@@ -21,7 +21,19 @@ For each brief, `worker.sh`:
 4. runs the reviewer, sends any gaps back to the worker for one fix round, and commits;
 5. prints a summary for Opus: the result, tokens, peak context, gates, the self-report and the review.
 
-Opus then reviews the diff and merges it. Problems nobody could fix go to a follow-ups file that Opus works through before finishing.
+Opus then reviews the diff and merges it. Anything a worker or the reviewer found but was not allowed to do (out-of-scope work, bugs outside the brief, gaps in the plan) goes to a follow-ups file that Opus works through before finishing.
+
+### Staying inside the brief
+
+Each brief lists the files its worker may change (`allowed_files`). Sometimes the work hits a bug in code outside those files. The worker may fix it as an **extra edit** when it is the smallest change that fixes a proven defect blocking the brief. There is no limit on the number of files; what counts is what the change is:
+
+- It must come with proof (a failing command, a test, or a file and line) and be declared in the worker's report.
+- It may not add behaviour, refactor, rename or tidy up, or change an interface other code uses.
+- It may not touch a file another brief owns, or an off-limits file (dependencies, CI, build config, migrations; see `EXTRA_EDIT_PROTECTED`) unless the brief lists it.
+
+The script fails the gates for an undeclared edit, another brief's file, or an off-limits file. The reviewer judges every other extra edit against the rule above. A rejected one goes back to the worker for one fix round. If it is still there afterwards (or the fix round stops, errors or is discarded), the run is not failed for it, but the summary carries a `FLAG for Opus` note so Opus decides on it before merging. Extra edits that first appear in the fix round get the same flag, because no reviewer has seen them.
+
+Anything beyond the brief that the worker noticed but must not do (a refactor, a new feature, an interface change, a cleanup, a bug that does not block it, a gap in the plan) is **flagged in its report as a follow-up**, with its kind, proof and a suggested fix. Follow-ups collect in `.shikigami/<feature>/followups.md`, and Opus works through them before finishing.
 
 ## Requirements
 
@@ -90,7 +102,7 @@ Settings are read in this order, and the last one wins: the plugin's defaults, t
 | `TESTER_MODEL` | the reviewer model | Black-box tester model |
 | `TESTER_EFFORT` | `high` | Black-box tester effort |
 | `MAX_PARALLEL` | `8` | Workers running at once; extra runs wait for a free slot |
-| `EXTRA_EDIT_MAX_FILES` | `2` | Files a worker may change outside its brief, with proof |
+| `EXTRA_EDIT_PROTECTED` | dependency manifests and lockfiles, CI and build config, migrations | Files a worker may never change as an extra edit, unless the brief lists them in `allowed_files` (space-separated globs; `""` turns the check off) |
 | `WORKER_TIMEOUT` | `7200` | Seconds before a hung OpenCode run is stopped |
 | `ACCEPT_TIMEOUT` | `900` | Seconds for each acceptance command and the black-box test run |
 | `FAIL_TAIL_LINES` | `40` | Lines of failure output shown to Opus |

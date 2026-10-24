@@ -49,7 +49,7 @@ Tests that break weak implementations. Write "none" only with the reason.
 
 ## Interfaces to keep
 
-Signatures, types, formats and behaviour that must not change. Anything that must not be touched at all goes here, because a worker may make small, proven extra edits outside `allowed_files`.
+Signatures, types, formats and behaviour that must not change. Anything that must not be touched at all goes here, because a worker may make proven extra edits outside `allowed_files` to fix a defect that blocks this brief.
 
 ## Out of scope
 
@@ -57,4 +57,4 @@ Work that is not part of this brief's goal.
 
 ## Discovery rule
 
-Fix it inside `allowed_files` when you can. A small, proven fix outside them is an extra edit: allowed only in files no other brief owns, within the extra-edit limit, keeping the interfaces above, and declared under Extra edits with proof. Report anything else that is wrong as a follow-up. Stop only when the problem blocks this brief and no allowed fix exists.
+Fix it inside `allowed_files` when you can. The smallest fix for a proven defect outside them that blocks this brief is an extra edit: allowed only in files no other brief owns and that are not off-limits (dependencies, CI, build config, migrations), keeping the interfaces above, and declared under Extra edits with proof. Flag anything beyond this brief (a refactor, a new feature, an interface change, a cleanup, a bug that does not block it) as a follow-up instead of doing it. Stop only when the problem blocks this brief and no allowed fix exists.

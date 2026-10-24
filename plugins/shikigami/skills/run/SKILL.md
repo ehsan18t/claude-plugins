@@ -57,7 +57,7 @@ Write one file per worker brief: `.shikigami/<FEATURE>/briefs/<n>.md`, from `SKI
 - `acceptance` lists shell commands run from the worktree root. Each must exit 0 when the brief is done.
 - Every checklist item is tagged `[auto]` (covered by an acceptance command or test) or `[review]` (you check it in the diff).
 - **Hard cases** lists the tests that break weak implementations: concurrency (the same operation many times at once), injected failures (a write that fails halfway, a dependency that throws), platform differences, large inputs. Write "none" only with the reason.
-- Workers may make small, proven **extra edits** outside `allowed_files` (up to `EXTRA_EDIT_MAX_FILES`), never in files another brief owns. Anything that must not change at all goes under "Interfaces to keep", not "Out of scope".
+- Workers may make proven **extra edits** outside `allowed_files`: the smallest change that fixes a defect in existing code that blocks the brief, however many files that takes. Never in files another brief owns, and never in the off-limits files in `EXTRA_EDIT_PROTECTED` (dependencies, CI, build config, migrations) unless the brief lists them in `allowed_files`; list them there when the brief really needs them. Refactors, new behaviour, interface changes and cleanups are not extra edits: workers flag them as follow-ups with a kind. Anything that must not change at all goes under "Interfaces to keep", not "Out of scope".
 - Keep a brief around 1,500 tokens.
 
 Done when: every worker brief in `plan.md` has a brief file that `worker.sh` accepts, and every `[auto]` item maps to an acceptance command or a listed test case.
@@ -96,7 +96,7 @@ Review a `PASS`:
 1. Read the summary's `## Notes` first.
 2. Read the diff: `git diff <base> shikigami/<FEATURE>/<n>` (the base commit is in the summary).
 3. Check every `[review]` checklist item against the diff, and the worker's self-report against the code.
-4. Check every **extra edit** (the report's Extra edits section and the `file boundary` gate line): confirm the problem and the proof yourself. The reviewer has already given its verdict, but it shares the worker's weakness on facts.
+4. Check every **extra edit** (the report's Extra edits section and the `file boundary` gate line, which gives each file's changed lines): confirm the defect and the proof yourself. The reviewer has already given its verdict, but it shares the worker's weakness on facts. A `FLAG for Opus` note means the reviewer rejected an extra edit and it is still in the change after the fix round: decide on each one (keep it, revert it in the worktree, or move it to a follow-up) before merging. Many or large extra edits usually mean the plan missed a piece: record a plan miss.
 5. **Deeper review** when the notes say the second-pass review is missing or unparsed, when black-box tests still fail, or when the brief touches files, concurrency, the network or platform behaviour: reading the code is not enough. Run at least one adversarial check on the riskiest claim yourself (the same call 20 times in parallel, a failure injected halfway, an input at the boundary), in the brief's worktree.
 6. Read the worker's Discoveries. A discovery, finding or follow-up the plan should have covered is a plan miss: `worker.sh plan-miss <FEATURE> <n> "<one line>"`.
 7. If something is wrong and small, fix it in the brief's worktree (`.shikigami/worktrees/<FEATURE>-<n>`, where the branch is checked out) and commit there. If it is large, write what is wrong into the brief and rerun the worker.
