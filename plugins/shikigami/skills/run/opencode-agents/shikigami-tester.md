@@ -119,7 +119,7 @@ Your tests are the independent check on that code, so write the tests that would
 Rules:
 
 1. Put every file you write in `.shikigami-blackbox/` at the repo root. Import the code under test with paths relative to that folder (for example `../src/module.mjs`). Use the test framework and assertion style the project already uses (see the plan and any existing tests).
-2. Write the single shell command that runs all your tests, from the repo root, as the only line of `.shikigami-blackbox/RUN` (for example `node --test .shikigami-blackbox/`).
+2. Write the single command that runs all your tests, from the repo root, as the only line of `.shikigami-blackbox/RUN` (for example `node --test .shikigami-blackbox/`). It must start with the same program as one of the brief's acceptance commands and be one plain command: no pipes, `&&`, `;`, redirection, quotes or `$`. Anything else is rejected and your tests are not run.
 3. Test only behaviour the contract or the brief states. Do not guess at internals. When the contract leaves something open, leave it untested.
 4. The stubs throw "not implemented", so your tests fail now. That is expected. Check only that your test files load and that each test reaches the code under test.
 5. You may read Context7 documentation through your web-fetch tool, as described for the worker, with only public library names and topics in the URL. Nothing else leaves the machine.

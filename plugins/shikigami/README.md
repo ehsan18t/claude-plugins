@@ -77,6 +77,8 @@ That writes `~/.config/shikigami/shikigami.conf` with every setting commented ou
 - **Workers are offline**, except for [Context7](https://context7.com) library documentation. OpenCode's Code Mode is off, and the shell blocks `curl`, `wget`, PowerShell web commands and package installs. This is best effort: a script that makes its own web request can still get through, so the worker's instructions also forbid it.
 - **The reviewer** may read Context7 and an allow list of documentation, issue-tracker and package-registry sites (in `opencode-agents/shikigami-reviewer.md`), with no shell and no web search. Every verdict that relies on a web page must cite it, and the summary lists every page the reviewer read or was refused.
 - **Your repository's history is never touched by a worker.** Workers cannot commit, reset, switch branches or push; `worker.sh` commits on a separate branch, and Opus merges.
+- **Black-box tests (`TEST_WRITER=on`)** run outside OpenCode's permissions, like the brief's acceptance commands. Their `RUN` line must be one plain command (no pipes, chaining, substitution or redirection) that starts with the same program as an acceptance command, and the test files are kept outside the worktree so the worker cannot change them. The tests themselves are still code a model wrote, so only turn the tester on for code you would run anyway.
+- **Feature and brief names** may use letters, digits, `.`, `_` and `-` only, and `worker.sh` only ever deletes folders under `.shikigami/worktrees/`.
 - **Data:** the code in each brief is sent to the worker and reviewer models through OpenCode. Check the data terms of the plan and models you use before running it on code you are not allowed to share.
 
 ## Files it creates in your repository

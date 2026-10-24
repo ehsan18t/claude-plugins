@@ -32,6 +32,12 @@ unixpath() { if command -v cygpath >/dev/null 2>&1; then cygpath -u "$1"; else p
 lib() { node "$(native "$SKILL_DIR/lib.mjs")" "$@"; }
 usage() { sed -n '3,10p' "$SKILL_DIR/worker.sh"; }
 need() { [ -n "${1:-}" ] || { echo "RESULT: ERROR"; echo "reason: missing argument: $2"; usage; exit 3; }; }
+# safe_name <value> <what>: feature and brief names become paths and branch names, so no slashes or "..".
+safe_name() {
+  need "${1:-}" "$2"
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && "$1" != *..* ]] \
+    || { echo "RESULT: ERROR"; echo "reason: bad $2 name '$1': use letters, digits, '.', '_' and '-' only"; exit 3; }
+}
 version_ge() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]; }
 model_label() { case "$1" in *glm*) echo GLM ;; *deepseek*) echo DeepSeek ;; *claude*|*anthropic*) echo Claude ;; *) echo "${1##*/}" ;; esac; }
 
@@ -121,6 +127,7 @@ release_slot() { [ -n "${SLOT:-}" ] && rm -rf "$SLOT"; SLOT=""; }
 
 remove_worktree() {
   local wt="$1" br="$2"
+  case "$wt" in "$ROOT/$STATE/worktrees/"?*) ;; *) echo "refusing to remove $wt: not under $STATE/worktrees" >&2; return 1 ;; esac
   if [ -d "$wt" ]; then git -C "$ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || rm -rf "$wt"; fi
   git -C "$ROOT" worktree prune >/dev/null 2>&1
   [ -n "$br" ] && git -C "$ROOT" show-ref --verify --quiet "refs/heads/$br" && git -C "$ROOT" branch -D "$br" >/dev/null 2>&1
@@ -427,10 +434,20 @@ run_blackbox() {
     if [ ! -s "$TWT/$BLACKBOX_DIR/RUN" ]; then
       BB_STATUS="missing"; note "black-box tester wrote no $BLACKBOX_DIR/RUN file"; return 0
     fi
-    rm -rf "$WT/$BLACKBOX_DIR"; cp -r "$TWT/$BLACKBOX_DIR" "$WT/$BLACKBOX_DIR"
+    # Keep the tester's files outside every worktree, so a worker in the fix round cannot change the tests or RUN.
+    BB_SAVED="$RUN_PREFIX-blackbox"; rm -rf "$BB_SAVED"; cp -r "$TWT/$BLACKBOX_DIR" "$BB_SAVED"
     with_git_lock remove_worktree "$TWT" ""; TWT=""
+    # RUN is model-written and runs outside OpenCode's permissions: allow one plain command line (no pipes,
+    # chaining, substitution or redirection) that starts with the same program as one of the brief's acceptance commands.
+    runcmd="$(head -1 "$BB_SAVED/RUN" | tr -d '\r')"
+    if ! [[ "$runcmd" =~ ^[A-Za-z0-9\ ._/=:@+*-]+$ ]] \
+      || ! lib lines "$(native "$BRIEF")" acceptance | awk '{print $1}' | grep -qxF -- "${runcmd%% *}"; then
+      BB_STATUS="missing"; note "black-box RUN command rejected (plain command using an acceptance runner required): $runcmd"; return 0
+    fi
+    note "black-box tests run with: $runcmd"
   fi
-  runcmd="$(head -1 "$WT/$BLACKBOX_DIR/RUN")"
+  runcmd="$(head -1 "$BB_SAVED/RUN" | tr -d '\r')"
+  rm -rf "$WT/$BLACKBOX_DIR"; cp -r "$BB_SAVED" "$WT/$BLACKBOX_DIR"
   ( cd "$WT" && run_timeout "$ACCEPT_TIMEOUT" bash -c "$runcmd" </dev/null ) > "$BB_OUT" 2>&1; rc=$?
   if [ $rc -eq 0 ]; then BB_STATUS=pass; return 0; fi
   BB_STATUS="fail (exit $rc)"; return 1
@@ -438,7 +455,7 @@ run_blackbox() {
 
 cmd_run() {
   START=$(date +%s); FEATURE="${1:-}"; ID="${2:-}"; EFFORT="$WORKER_EFFORT"
-  need "$FEATURE" feature; need "$ID" brief; shift 2
+  safe_name "$FEATURE" feature; safe_name "$ID" brief; shift 2
   while [ $# -gt 0 ]; do
     case "$1" in
       --effort) need "${2:-}" effort; EFFORT="$2"; shift 2 ;;
@@ -567,7 +584,7 @@ Fix gaps within the discovery rule. For an extra edit marked not justified, eith
 
 cmd_cleanup() {
   local feature="${1:-}" id="${2:-}"
-  need "$feature" feature; need "$id" brief
+  safe_name "$feature" feature; safe_name "$id" brief
   ROOT="$(repo_root)" || exit 3
   with_git_lock remove_worktree "$ROOT/$STATE/worktrees/$feature-$id" "shikigami/$feature/$id"
   with_git_lock remove_worktree "$ROOT/$STATE/worktrees/$feature-$id-tests" ""
@@ -576,7 +593,7 @@ cmd_cleanup() {
 
 cmd_plan_miss() {
   local feature="${1:-}" id="${2:-}" text="${3:-}"
-  need "$feature" feature; need "$id" brief; need "$text" note
+  safe_name "$feature" feature; safe_name "$id" brief; need "$text" note
   ROOT="$(repo_root)" || exit 3
   mkdir -p "$ROOT/$STATE/$feature"
   lib log "$(native "$ROOT/$STATE/$feature/runs.log")" event=plan_miss feature="$feature" brief="$id" note="$text"
