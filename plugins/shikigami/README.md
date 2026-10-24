@@ -102,7 +102,7 @@ Settings are read in this order, and the last one wins: the plugin's defaults, t
 | `TESTER_MODEL` | the reviewer model | Black-box tester model |
 | `TESTER_EFFORT` | `high` | Black-box tester effort |
 | `MAX_PARALLEL` | `8` | Workers running at once; extra runs wait for a free slot |
-| `EXTRA_EDIT_PROTECTED` | dependency manifests and lockfiles, CI and build config, migrations | Files a worker may never change as an extra edit, unless the brief lists them in `allowed_files` (space-separated globs; `""` turns the check off) |
+| `EXTRA_EDIT_PROTECTED` | dependency manifests and lockfiles, CI and build config, migrations, and configs that run code (git hooks, `.npmrc`, editor and dev-container settings) | Files a worker may never change as an extra edit, unless the brief lists them in `allowed_files` (space-separated globs, matched ignoring case; `""` turns the check off) |
 | `WORKER_TIMEOUT` | `7200` | Seconds before a hung OpenCode run is stopped |
 | `ACCEPT_TIMEOUT` | `900` | Seconds for each acceptance command and the black-box test run |
 | `FAIL_TAIL_LINES` | `40` | Lines of failure output shown to Opus |

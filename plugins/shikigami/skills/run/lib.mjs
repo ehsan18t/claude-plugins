@@ -110,7 +110,8 @@ function scope(briefFile, changedFile, reportFile, briefsDir, offLimits, extraOu
     .filter((x) => x.by);
   const extra = outside.filter((f) => declared.has(f));
   // Off-limits files (dependencies, CI, build config, migrations) may change only when the brief lists them.
-  const offRes = String(offLimits || "").split(/\s+/).filter(Boolean).map(globToRegex);
+  // Matched ignoring case: on Windows and macOS "Package.json" is the same file as "package.json".
+  const offRes = String(offLimits || "").split(/\s+/).filter(Boolean).map((g) => new RegExp(globToRegex(g).source, "i"));
   const offHits = extra.filter((f) => offRes.some((r) => r.test(f)));
   fs.writeFileSync(extraOut, extra.join("\n"));
   console.log([
