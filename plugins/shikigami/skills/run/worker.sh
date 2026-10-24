@@ -247,7 +247,7 @@ cmd_doctor() {
   if [ ${#problems[@]} -eq 0 ]; then
     sync_agents
     [ -n "${EXTRA_EDIT_MAX_FILES:-}" ] && echo "note: EXTRA_EDIT_MAX_FILES is no longer used (extra edits are judged by what they are, and EXTRA_EDIT_PROTECTED lists off-limits files); remove it from $USER_CONF or your environment"
-    echo "OK (OpenCode $(oc_version); worker $WORKER_MODEL at $WORKER_EFFORT; reviewer $REVIEWER_MODEL at $REVIEWER_EFFORT; black-box tester ${TEST_WRITER}; max $MAX_PARALLEL parallel${AGENT_OVERRIDES:+; your agent files:$AGENT_OVERRIDES})"
+    echo "OK (OpenCode $(oc_version); worker $WORKER_MODEL at $WORKER_EFFORT; reviewer $REVIEWER_MODEL at $REVIEWER_EFFORT; fallback reviewer $([ -n "$REVIEWER_FALLBACK_MODEL" ] && echo "$REVIEWER_FALLBACK_MODEL at $REVIEWER_FALLBACK_EFFORT" || echo none); black-box tester ${TEST_WRITER}$([ "$TEST_WRITER" = on ] && echo " ($TESTER_MODEL at $TESTER_EFFORT)"); max $MAX_PARALLEL parallel${AGENT_OVERRIDES:+; your agent files:$AGENT_OVERRIDES})"
   else
     printf 'PROBLEM: %s\n' "${problems[@]}"
     return 1
@@ -626,23 +626,29 @@ cmd_run() {
   cp "$REPORT" "$WT/$INPUT_DIR/report.md"
   REVIEW_STATUS=ok; FD_INSIDE=0; FD_OUTSIDE=0; FD_SCOPE=0; FD_UNVERIFIED=""; FD_SCOPE_FILES=""; FD_PARSED=0
   local rmodel="$REVIEWER_MODEL" rmsg="Review the attached diff for brief $ID. Answer one question: what does this change miss, given the goal? Also verify every entry under Extra edits in the attached worker report. Use the output format from your instructions."
-  [ -n "$(paused_since "$rmodel")" ] && rmodel="${REVIEWER_FALLBACK_MODEL:-}"
+  # The fallback model is used only when REVIEWER_FALLBACK_MODEL is set, and every switch is named in the notes.
+  local reff="$REVIEWER_EFFORT" fb="${REVIEWER_FALLBACK_MODEL:-}"
+  if [ -n "$(paused_since "$rmodel")" ]; then
+    if [ -n "$fb" ]; then note "reviewer $rmodel is paused after a limit; reviewed with the fallback $fb#$REVIEWER_FALLBACK_EFFORT instead"; fi
+    rmodel="$fb"; reff="$REVIEWER_FALLBACK_EFFORT"
+  fi
   local reviewed=1
   if [ -n "$rmodel" ] && [ -z "$(paused_since "$rmodel")" ]; then
-    oc_session review shikigami-reviewer "$rmodel" "$REVIEWER_EFFORT" "$rmsg" \
+    oc_session review shikigami-reviewer "$rmodel" "$reff" "$rmsg" \
       "$INPUT_DIR/brief.md" "$INPUT_DIR/change.diff" "$INPUT_DIR/report.md" && reviewed=0
     if [ $reviewed -ne 0 ]; then
       [ "$OC_LIMIT" = 1 ] && limit_pause "$rmodel" >/dev/null
-      local fb="${REVIEWER_FALLBACK_MODEL:-}"
       if [ -n "$fb" ] && [ "$fb" != "$rmodel" ] && [ -z "$(paused_since "$fb")" ]; then
-        note "reviewer $rmodel failed ($OC_ERR); retried with $fb"
-        oc_session review-fallback shikigami-reviewer "$fb" "$REVIEWER_EFFORT" "$rmsg" \
+        note "reviewer $rmodel failed ($OC_ERR); reviewed with the fallback $fb#$REVIEWER_FALLBACK_EFFORT instead"
+        oc_session review-fallback shikigami-reviewer "$fb" "$REVIEWER_FALLBACK_EFFORT" "$rmsg" \
           "$INPUT_DIR/brief.md" "$INPUT_DIR/change.diff" "$INPUT_DIR/report.md" && reviewed=0
         [ $reviewed -ne 0 ] && [ "$OC_LIMIT" = 1 ] && limit_pause "$fb" >/dev/null
       fi
     fi
+  elif [ -n "$fb" ]; then
+    OC_ERR="the reviewer $REVIEWER_MODEL and the fallback $fb are both paused after a limit"
   else
-    OC_ERR="every reviewer model is paused after a usage limit"
+    OC_ERR="the reviewer $REVIEWER_MODEL is paused after a limit, and no fallback is set (REVIEWER_FALLBACK_MODEL)"
   fi
   if [ $reviewed -eq 0 ]; then
     cp "$OC_TEXT" "$REVIEW"

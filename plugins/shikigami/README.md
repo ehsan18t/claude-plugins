@@ -9,9 +9,9 @@ In onmyōdō folklore, a shikigami is a spirit a sorcerer summons to act on thei
 | Role | Default model | Job |
 |---|---|---|
 | Orchestrator | Claude Opus (your Claude Code session) | Research, plan, contract stubs, briefs, final review, merge |
-| Worker | DeepSeek V4.1 Flash | Implements one brief in its own worktree |
-| Reviewer | GLM-5.3 Flash | Checks each finished brief for gaps and verifies every out-of-scope edit |
-| Black-box tester (optional) | GLM-5.3 Flash | Writes tests from the brief and contract alone, without seeing the worker's code |
+| Worker | DeepSeek V4.1 Flash, effort high (max on a retry) | Implements one brief in its own worktree |
+| Reviewer | Muse Spark 1.3 Contributor, effort xhigh | Checks each finished brief for gaps and verifies every out-of-scope edit |
+| Black-box tester (optional) | Muse Spark 1.3 Contributor, effort xhigh | Writes tests from the brief and contract alone, without seeing the worker's code |
 
 For each brief, `worker.sh`:
 
@@ -38,7 +38,7 @@ Anything beyond the brief that the worker noticed but must not do (a refactor, a
 ## Requirements
 
 - [Claude Code](https://code.claude.com)
-- [OpenCode](https://opencode.ai) v2 or newer, signed in. The free tier works for trying it out, but its allowance is small and shared across models; [OpenCode Go](https://opencode.ai/docs/go/) is the realistic option for whole features.
+- [OpenCode](https://opencode.ai) v2 or newer, signed in, with an [OpenCode Go](https://opencode.ai/docs/go/) subscription for the default models. In the OpenCode console's **Settings > Privacy**, select the **Global** region (for DeepSeek) and turn on **Allow paid endpoints that train on request data** (for Muse Spark Contributor, which may use your prompts and code for training). The free tier also works if you switch to its models (see Configuration), but its allowance is small and shared by all the free models.
 - Node.js 18 or newer
 - Git, and bash (on Windows, Git Bash)
 
@@ -79,29 +79,31 @@ If `XDG_CONFIG_HOME` is set, it replaces `~/.config` in these paths.
 ### Change a setting
 
 1. Create your settings file. In Claude Code, run `/shikigami:run config`. It writes `~/.config/shikigami/shikigami.conf` with every setting commented out, and prints the path. If the file already exists, it only prints the path.
-2. Open the file, remove the `#` in front of each setting you want to change, and edit its value. For example, to switch to OpenCode Go after subscribing, run `opencode models`, find the Go IDs for DeepSeek V4.1 Flash and GLM-5.3 Flash, and set:
+2. Open the file, remove the `#` in front of each setting you want to change, and edit its value. For example, to use the free tier instead of Go:
 
    ```bash
-   WORKER_MODEL="<Go ID for DeepSeek V4.1 Flash>"
-   REVIEWER_MODEL="<Go ID for GLM-5.3 Flash>"
+   WORKER_MODEL="opencode/deepseek-v4.1-flash-free"
+   REVIEWER_MODEL="opencode/glm-5.3-flash-free"
+   REVIEWER_EFFORT="max"
    ```
 
-   Leave out the `#effort` part of the ID; the effort settings add it.
+   Leave out the `#effort` part of the ID; the effort settings add it. Run `opencode models` to see the IDs your account has. Efforts differ by model: Muse Spark Contributor on Go goes up to `xhigh` and has no `max`, and a run with an effort the model does not have fails with "Variant unavailable".
 3. That's it. Every `worker.sh` call reads the file, so the next run uses the new value without a restart. Run `/shikigami:run doctor` to confirm: it prints the models, efforts and limits it will use.
 
 Settings are read in this order, and the last one wins: the plugin's defaults, then your settings file, then an environment variable of the same name. An environment variable is handy for a one-off change, but it must be set in the shell you start Claude Code from.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `WORKER_MODEL` | `opencode/deepseek-v4.1-flash-free` | Worker model, without the `#effort` part |
+| `WORKER_MODEL` | `opencode-go/deepseek-v4.1-flash` | Worker model, without the `#effort` part |
 | `WORKER_EFFORT` | `high` | Worker effort. Retries use `max`. |
-| `REVIEWER_MODEL` | `opencode/glm-5.3-flash-free` | Second-pass reviewer |
-| `REVIEWER_EFFORT` | `max` | Reviewer effort |
-| `REVIEWER_FALLBACK_MODEL` | the worker model | Used when the reviewer fails or hits its limit; empty for none |
+| `REVIEWER_MODEL` | `opencode-go/muse-spark-1.3-contributor` | Second-pass reviewer |
+| `REVIEWER_EFFORT` | `xhigh` | Reviewer effort (`xhigh` is Muse Contributor's highest on Go) |
+| `REVIEWER_FALLBACK_MODEL` | none | Another model to review with when the reviewer fails or stays limited. Off by default, so a run never switches model on its own; when set, every switch is named in the summary |
+| `REVIEWER_FALLBACK_EFFORT` | `max` | Effort for the fallback reviewer |
 | `TEST_WRITER` | `off` | `on` adds the black-box tester (more quota, more independent tests) |
 | `TESTER_MODEL` | the reviewer model | Black-box tester model |
-| `TESTER_EFFORT` | `high` | Black-box tester effort |
-| `MAX_PARALLEL` | `8` | Workers running at once; extra runs wait for a free slot |
+| `TESTER_EFFORT` | `xhigh` | Black-box tester effort |
+| `MAX_PARALLEL` | `5` | Briefs running at once; extra runs wait for a free slot |
 | `EXTRA_EDIT_PROTECTED` | dependency manifests and lockfiles, CI and build config, migrations, and configs that run code (git hooks, `.npmrc`, editor and dev-container settings) | Files a worker may never change as an extra edit, unless the brief lists them in `allowed_files` (space-separated globs, matched ignoring case; `""` turns the check off) |
 | `WORKER_TIMEOUT` | `7200` | Seconds before a hung OpenCode run is stopped |
 | `ACCEPT_TIMEOUT` | `900` | Seconds for each acceptance command and the black-box test run |

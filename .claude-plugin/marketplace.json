@@ -5,7 +5,7 @@
     {
       "name": "shikigami",
       "source": "./plugins/shikigami",
-      "description": "Opus plans and reviews; cheap OpenCode models (DeepSeek, GLM) implement and check each brief in parallel git worktrees."
+      "description": "Opus plans and reviews; cheap OpenCode models (DeepSeek, Muse Spark) implement and check each brief in parallel git worktrees."
     }
   ]
 }

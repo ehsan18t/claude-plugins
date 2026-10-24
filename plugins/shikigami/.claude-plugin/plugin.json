@@ -3,7 +3,7 @@
   "name": "shikigami",
   "displayName": "Shikigami",
   "version": "0.2.0",
-  "description": "Opus plans and reviews; cheap OpenCode models (DeepSeek, GLM) implement and check each brief in parallel git worktrees.",
+  "description": "Opus plans and reviews; cheap OpenCode models (DeepSeek, Muse Spark) implement and check each brief in parallel git worktrees.",
   "author": { "name": "Ehsan Khan", "url": "https://github.com/ehsan18t" },
   "homepage": "https://github.com/ehsan18t/claude-plugins/tree/main/plugins/shikigami",
   "repository": "https://github.com/ehsan18t/claude-plugins",

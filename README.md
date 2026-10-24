@@ -20,7 +20,7 @@ claude plugin install <plugin>@ehsan18t
 
 | Plugin | What it does | Start with |
 |---|---|---|
-| [Shikigami](plugins/shikigami) | Opus plans a feature and does the final review; cheap OpenCode models (DeepSeek, GLM) implement and check each piece in parallel git worktrees. Cuts Opus usage on multi-part features. | `/shikigami:run` |
+| [Shikigami](plugins/shikigami) | Opus plans a feature and does the final review; cheap OpenCode models (DeepSeek, Muse Spark) implement and check each piece in parallel git worktrees. Cuts Opus usage on multi-part features. | `/shikigami:run` |
 
 ## Layout
 

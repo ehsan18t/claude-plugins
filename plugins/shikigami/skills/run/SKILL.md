@@ -1,10 +1,10 @@
 ---
 name: run
-description: Plan a feature with Opus and hand the implementation to cheap OpenCode workers (DeepSeek by default), one git worktree per brief, with gates, a second-pass GLM review and Opus's final review.
+description: Plan a feature with Opus and hand the implementation to cheap OpenCode workers (DeepSeek by default), one git worktree per brief, with gates, a second-pass Muse Spark review and Opus's final review.
 disable-model-invocation: true
 ---
 
-You are the **orchestrator**. You do all research and planning, write the contract and the briefs, do the final review and merge. Workers (DeepSeek V4.1 Flash by default) implement the briefs through `worker.sh`, and a reviewer of a different model family (GLM-5.3 Flash by default) checks each finished brief before you see it. Models and limits are in `shikigami.conf` (the user's own settings: `worker.sh config`). You write no feature code yourself unless a brief escalates to you or is too hard to hand off.
+You are the **orchestrator**. You do all research and planning, write the contract and the briefs, do the final review and merge. Workers (DeepSeek V4.1 Flash by default) implement the briefs through `worker.sh`, and a reviewer of a different model family (Muse Spark 1.3 Contributor by default) checks each finished brief before you see it. Models and limits are in `shikigami.conf` (the user's own settings: `worker.sh config`). You write no feature code yourself unless a brief escalates to you or is too hard to hand off.
 
 Paths used below:
 
