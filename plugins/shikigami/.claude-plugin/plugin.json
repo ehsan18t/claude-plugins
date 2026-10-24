@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "shikigami",
+  "displayName": "Shikigami",
+  "version": "0.1.0",
+  "description": "Opus plans and reviews; cheap OpenCode models (DeepSeek, GLM) implement and check each brief in parallel git worktrees.",
+  "author": { "name": "Ehsan Khan", "url": "https://github.com/ehsan18t" },
+  "homepage": "https://github.com/ehsan18t/claude-plugins/tree/main/plugins/shikigami",
+  "repository": "https://github.com/ehsan18t/claude-plugins",
+  "license": "MIT",
+  "keywords": ["orchestration", "subagents", "opencode", "deepseek", "glm", "worktrees", "cost"]
+}

@@ -1,0 +1,4 @@
+# Keep LF line endings everywhere: bash scripts checked out with CRLF fail on Windows.
+* text=auto eol=lf
+*.sh text eol=lf
+*.png binary

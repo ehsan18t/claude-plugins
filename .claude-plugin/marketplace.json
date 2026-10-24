@@ -1,0 +1,11 @@
+{
+  "name": "ehsan18t",
+  "owner": { "name": "Ehsan Khan", "url": "https://github.com/ehsan18t" },
+  "plugins": [
+    {
+      "name": "shikigami",
+      "source": "./plugins/shikigami",
+      "description": "Opus plans and reviews; cheap OpenCode models (DeepSeek, GLM) implement and check each brief in parallel git worktrees."
+    }
+  ]
+}
