@@ -147,18 +147,34 @@ function globToRegex(pattern) {
 }
 
 function events(file, textOut, errOut) {
-  let session = "", error = "";
+  let session = "", error = "", errType = "", errStatus = "", retryMs = "";
   const texts = [];
   for (const line of read(file).split("\n").filter(Boolean)) {
     let e;
     try { e = JSON.parse(line); } catch { continue; }
     if (!session && e.sessionID) session = e.sessionID;
-    if (e.type === "error") error = e.error?.data?.message || e.error?.message || e.error?.name || "unknown error";
+    if (e.type === "error") {
+      const x = e.error || {};
+      error = x.data?.message || x.message || x.name || "unknown error";
+      // OpenCode's structured fields, e.g. {type: "provider.free-limit", status: 429, retryAfterMs: 43391000}.
+      errType = String(x.type || x.name || x.data?.type || "");
+      // Or the API-error shape {name: "APIError", data: {statusCode, responseHeaders: {"retry-after": ...}}}.
+      errStatus = String(x.status ?? x.statusCode ?? x.data?.status ?? x.data?.statusCode ?? "");
+      let ms = Number(x.retryAfterMs ?? x.data?.retryAfterMs);
+      if (!Number.isFinite(ms)) {
+        const h = x.data?.responseHeaders || x.responseHeaders || {};
+        const ra = h["retry-after"] ?? h["Retry-After"];
+        const secs = Number(ra);
+        ms = ra == null ? NaN : Number.isFinite(secs) ? secs * 1000 : Date.parse(ra) - Date.now();
+      }
+      retryMs = Number.isFinite(ms) && ms >= 0 ? String(Math.round(ms)) : "";
+    }
     if (e.type === "text" && e.part?.text) texts.push(e.part.text);
   }
   fs.writeFileSync(textOut, texts.at(-1) || "");
   fs.writeFileSync(errOut, error);
-  console.log(`EV_SESSION=${sh(session)}`);
+  console.log([`EV_SESSION=${sh(session)}`, `EV_ERR_TYPE=${sh(errType)}`, `EV_ERR_STATUS=${sh(errStatus)}`,
+    `EV_RETRY_MS=${sh(retryMs)}`].join("\n"));
 }
 
 function sessionFigures(file) {

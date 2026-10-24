@@ -88,7 +88,7 @@ Done when: every dispatched brief has printed its `RESULT:` block.
 | `FAIL` at effort high | Rerun at max effort: `worker.sh run <FEATURE> <n> --effort max`. |
 | `FAIL` at effort max | `worker.sh cleanup <FEATURE> <n>`, then escalate: start an Opus subagent in its own worktree, give it the brief and the plan, and review its work like a worker's. |
 | `STOPPED` | The worker found that the brief or plan is wrong. Read its report, fix the plan and the brief, record a plan miss, and dispatch again (or do it yourself). |
-| `ERROR`, reason "usage limit" or "paused" | The model's quota ran out, and `worker.sh` paused it so queued runs do not burn more. Stop dispatching, tell the user which model is paused and since when, and continue after they confirm it has reset (`worker.sh resume`). |
+| `ERROR`, reason "usage limit", "rate limit" or "paused" | The model's allowance ran out, or a rate limit outlasted every retry, and `worker.sh` paused it so queued runs do not burn more. (Short rate limits are waited out inside the run and only show as notes.) Stop dispatching to that model and tell the user which model is paused and until when. If the reason gives an end time, dispatch again after it; otherwise continue after the user confirms the limit has reset (`worker.sh resume`). |
 | `ERROR`, any other reason | Infrastructure problem (OpenCode, setup, git config, a bad brief). Read the reason, fix the cause, rerun at the same effort. It does not count against the worker. |
 
 Review a `PASS`:

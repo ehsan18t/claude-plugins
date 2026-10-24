@@ -5,7 +5,7 @@
 #   worker.sh run <feature> <brief> [--effort max]   implement one brief (prints a RESULT: block)
 #   worker.sh cleanup <feature> <brief>              remove the brief's worktree and branch
 #   worker.sh plan-miss <feature> <brief> "<note>"   record something the plan should have covered
-#   worker.sh resume [model]                         lift a usage-limit pause (all models, or one)
+#   worker.sh resume [model]                         lift a usage-limit pause now (all models, or one)
 #   worker.sh config                                 create your settings file and print its path
 #   worker.sh config agent <worker|reviewer|tester>  copy an agent file to your settings folder to change it
 #
@@ -26,7 +26,10 @@ INPUT_DIR=".shikigami-input"
 BLACKBOX_DIR=".shikigami-blackbox"
 MIN_OPENCODE="2.0.0"
 EXCLUDES=("$STATE/" "$INPUT_DIR/" "$REPORT_NAME" "$BLACKBOX_DIR/")
-LIMIT_PATTERN='usage limit|rate limit|quota|too many requests|insufficient (credit|balance)|\b429\b'
+# Limit errors (OpenCode's HTTP 429 or this wording). OpenCode's retryAfterMs, when given, decides short or long;
+# without it, QUOTA_PATTERN means the allowance ran out (long) and anything else is a short rate limit.
+LIMIT_PATTERN='usage limit|rate[ _-]?limit|quota|budget exceeded|too many requests|insufficient (credit|balance)|\b429\b|retry after|overloaded|free messages'
+QUOTA_PATTERN='usage limit|free-limit|UsageLimitError|quota|budget exceeded|insufficient (credit|balance)|subscribe|free messages'
 
 native() { if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s\n' "$1"; fi; }
 unixpath() { if command -v cygpath >/dev/null 2>&1; then cygpath -u "$1"; else printf '%s\n' "$1"; fi; }
@@ -149,12 +152,31 @@ add_detached_worktree() { git -C "$ROOT" worktree add -q --detach "$1" "$2"; }
 PAUSE_FILE() { printf '%s\n' "$ROOT/$STATE/paused"; }
 
 pause_model() {
-  # pause_model <model> <message>: later runs for this model fail fast until `worker.sh resume`.
+  # pause_model <model> <message> [until-epoch]: later runs for this model fail fast until that time
+  # (when OpenCode says when the limit resets) or until `worker.sh resume`.
   mkdir -p "$ROOT/$STATE"
-  printf '%s\t%s\t%s\n' "$1" "$(date '+%Y-%m-%d %H:%M')" "$(tr '\t\n' '  ' <<<"$2")" >> "$(PAUSE_FILE)"
+  printf '%s\t%s\t%s\t%s\n' "$1" "$(date '+%Y-%m-%d %H:%M')" "$(tr '\t\n' '  ' <<<"$2")" "${3:-}" >> "$(PAUSE_FILE)"
 }
 
-paused_since() { [ -f "$(PAUSE_FILE)" ] && awk -F'\t' -v m="$1" '$1==m {print $2; exit}' "$(PAUSE_FILE)"; }
+# Active pauses only: a pause whose end time has passed no longer counts.
+active_pauses() { [ -f "$(PAUSE_FILE)" ] && awk -F'\t' -v now="$(date +%s)" '$4=="" || $4+0>now' "$(PAUSE_FILE)"; }
+paused_since() { active_pauses | awk -F'\t' -v m="$1" '$1==m {print $2; exit}'; }
+# When the model's pause ends: the latest end time of its active pauses, or nothing if any of them has no end.
+paused_until() { active_pauses | awk -F'\t' -v m="$1" '$1==m { if ($4 == "") open = 1; else if ($4+0 > max) max = $4+0 } END { if (!open && max) print max }'; }
+fmt_time() { date -d "@$1" '+%Y-%m-%d %H:%M' 2>/dev/null || date -r "$1" '+%Y-%m-%d %H:%M'; }
+
+limit_pause() {
+  # limit_pause <model>: pause a model after a limit error that waiting did not clear; prints how the pause ends.
+  # Ends when OpenCode said the limit resets (retryAfterMs), after RATE_LIMIT_MAX_WAIT for a short rate limit,
+  # or at `worker.sh resume` when the allowance ran out and OpenCode gave no time.
+  # A short limit that outlasted every retry gets at least RATE_LIMIT_MAX_WAIT, whatever OpenCode's own wait was.
+  local until="" wait="${OC_RETRY_S:-}"
+  if [ "${OC_LIMIT_KIND:-}" = short ] && [ "${wait:-0}" -lt "$RATE_LIMIT_MAX_WAIT" ]; then wait=$RATE_LIMIT_MAX_WAIT; fi
+  [ -n "$wait" ] && until=$(( $(date +%s) + wait ))
+  pause_model "$1" "$OC_ERR" "$until"
+  if [ -n "$until" ]; then echo "paused until $(fmt_time "$until"), when it resumes on its own (or run \`worker.sh resume\` sooner)"
+  else echo "paused; run \`worker.sh resume\` once the limit resets"; fi
+}
 
 cmd_resume() {
   ROOT="$(repo_root)" || exit 3
@@ -213,7 +235,11 @@ cmd_doctor() {
   if ROOT="$(repo_root 2>/dev/null)"; then
     git -C "$ROOT" config user.email >/dev/null || problems+=("git user.email is not set, so worker branches cannot be committed")
     ensure_excludes
-    [ -f "$(PAUSE_FILE)" ] && problems+=("paused after a usage limit: $(cut -f1,2 "$(PAUSE_FILE)" | tr '\t\n' ' ;')run \`worker.sh resume\` once it resets")
+    local active="" pm ps pu
+    while IFS=$'\t' read -r pm ps _ pu; do
+      active="$active$pm since $ps${pu:+ (resumes on its own at $(fmt_time "$pu"))}; "
+    done < <(active_pauses)
+    [ -n "$active" ] && problems+=("paused after a usage limit: ${active}run \`worker.sh resume\` to lift it now")
   else
     problems+=("not in the main checkout of a git repository")
   fi
@@ -306,21 +332,27 @@ add_usage() {
 oc_start() {
   # oc_start <dir> <tag> <agent> <model> <effort> <message> <attachment>...: one OpenCode run in <dir>.
   # Writes $RUN_PREFIX-<tag>.jsonl; returns OpenCode's exit code.
+  # With OC_CONTINUE set to a session ID, continues that session instead (no new title or attachments).
   local dir="$1" tag="$2" agent="$3" model="$4" effort="$5" msg="$6" role=agent fargs=() f; shift 6
   case "$tag" in review*) role=reviewer ;; tests) role=tester ;; esac
-  for f in "$@"; do fargs+=(-f "$f"); done
+  if [ -n "${OC_CONTINUE:-}" ]; then fargs=(--session "$OC_CONTINUE")
+  else
+    fargs=(--title "$(model_label "$model") $role: $FEATURE/$ID ${TITLE:-} ($tag, attempt $ATTEMPT, $effort)")
+    for f in "$@"; do fargs+=(-f "$f"); done
+  fi
   # shellcheck disable=SC2086
   ( cd "$dir" && run_timeout "$WORKER_TIMEOUT" "$OPENCODE_BIN" run "$msg" $OPENCODE_RUN_FLAGS --agent "$agent" \
-      --model "$model#$effort" --format json \
-      --title "$(model_label "$model") $role: $FEATURE/$ID ${TITLE:-} ($tag, attempt $ATTEMPT, $effort)" "${fargs[@]}" </dev/null ) \
+      --model "$model#$effort" --format json "${fargs[@]}" </dev/null ) \
     > "$RUN_PREFIX-$tag.jsonl" 2> "$RUN_PREFIX-$tag.jsonl.stderr"
 }
 
 oc_collect() {
   # oc_collect <dir> <tag> <model> <effort> <rc>: read a finished run's events and token usage.
-  # Sets OC_TEXT, OC_ERR and OC_LIMIT (1 when the error is a usage or rate limit); returns 0 on success.
+  # Sets OC_TEXT, OC_ERR and OC_LIMIT (1 when the error is a usage or rate limit), with OC_LIMIT_KIND "short"
+  # (wait and continue) or "long" (pause the model) and OC_RETRY_S (OpenCode's wait, if it gave one); returns 0 on success.
   local dir="$1" tag="$2" model="$3" effort="$4" rc="$5" ev="$RUN_PREFIX-$2.jsonl" vars
-  OC_TEXT="$ev.text"; OC_ERR=""; OC_LIMIT=0; EV_SESSION=""
+  OC_TEXT="$ev.text"; OC_ERR=""; OC_LIMIT=0; OC_LIMIT_KIND=""; OC_RETRY_S=""
+  EV_SESSION=""; EV_ERR_TYPE=""; EV_ERR_STATUS=""; EV_RETRY_MS=""
   vars="$(lib events "$(native "$ev")" "$(native "$ev.text")" "$(native "$ev.err")")" || { OC_ERR="could not read OpenCode events ($ev)"; return 1; }
   eval "$vars"
   if [ -n "$EV_SESSION" ]; then
@@ -328,6 +360,13 @@ oc_collect() {
     ( cd "$dir" && "$OPENCODE_BIN" session export "$EV_SESSION" $OPENCODE_RUN_FLAGS </dev/null ) > "$ev.session.json" 2> /dev/null
     vars="$(lib session "$(native "$ev.session.json")")" && eval "$vars"
     if [ "${SS_OK:-0}" = 1 ]; then
+      # A continued session's export repeats its earlier turns, so count only what is new since the last collect.
+      local in=$SS_INPUT out=$SS_OUTPUT rs=$SS_REASONING cr=$SS_CACHE_READ cw=$SS_CACHE_WRITE cost=$SS_COST
+      if [ "$EV_SESSION" = "${LU_SESSION:-}" ]; then
+        SS_INPUT=$((in - LU_IN)); SS_OUTPUT=$((out - LU_OUT)); SS_REASONING=$((rs - LU_RS))
+        SS_CACHE_READ=$((cr - LU_CR)); SS_CACHE_WRITE=$((cw - LU_CW)); SS_COST="$(node -p "$cost-$LU_COST")"
+      fi
+      LU_SESSION=$EV_SESSION; LU_IN=$in; LU_OUT=$out; LU_RS=$rs; LU_CR=$cr; LU_CW=$cw; LU_COST=$cost
       add_usage
       [ "$tag" = worker ] && VARIANT_SEEN="$SS_VARIANT"
       case "$tag" in review*) REVIEWER_SEEN="$SS_MODEL#$SS_VARIANT" ;; esac
@@ -342,15 +381,42 @@ oc_collect() {
   timed_out "$rc" && OC_ERR="no result after ${WORKER_TIMEOUT}s (stopped)"
   [ "$rc" -ne 0 ] && [ -z "$OC_ERR" ] && OC_ERR="OpenCode exited $rc: $(tail -3 "$ev.stderr" 2>/dev/null | tr '\n' ' ')"
   [ -z "$EV_SESSION" ] && [ -z "$OC_ERR" ] && OC_ERR="OpenCode produced no session: $(tail -3 "$ev.stderr" 2>/dev/null | tr '\n' ' ')"
-  grep -qiE "$LIMIT_PATTERN" <<<"$OC_ERR" && OC_LIMIT=1
+  if [ -n "$OC_ERR" ] && { [ "$EV_ERR_STATUS" = 429 ] || grep -qiE "$LIMIT_PATTERN" <<<"$OC_ERR $EV_ERR_TYPE"; }; then
+    OC_LIMIT=1
+    [ -n "$EV_RETRY_MS" ] && OC_RETRY_S=$(( (EV_RETRY_MS + 999) / 1000 ))
+    if [ -n "$OC_RETRY_S" ]; then
+      if [ "$OC_RETRY_S" -le "$RATE_LIMIT_MAX_WAIT" ]; then OC_LIMIT_KIND=short; else OC_LIMIT_KIND=long; fi
+    elif grep -qiE "$QUOTA_PATTERN" <<<"$OC_ERR $EV_ERR_TYPE"; then OC_LIMIT_KIND=long
+    else OC_LIMIT_KIND=short; fi
+  fi
   [ -z "$OC_ERR" ]
 }
 
 oc_session() {
   # oc_session <tag> <agent> <model> <effort> <message> <attachment>...: run in the brief's worktree and collect.
-  local tag="$1" agent="$2" model="$3" effort="$4" rc
+  # A short rate limit is waited out (doubling from RATE_LIMIT_WAIT, or OpenCode's own wait if longer) and the same
+  # session continued, so no work is lost; after RATE_LIMIT_RETRIES tries it fails like any other limit.
+  local tag="$1" agent="$2" model="$3" effort="$4" rc try=0 delay ev="$RUN_PREFIX-$1.jsonl" keep f
   oc_start "$WT" "$@"; rc=$?
-  oc_collect "$WT" "$tag" "$model" "$effort" "$rc"
+  until oc_collect "$WT" "$tag" "$model" "$effort" "$rc"; do
+    { [ "$OC_LIMIT_KIND" = short ] && [ "$try" -lt "$RATE_LIMIT_RETRIES" ]; } || return 1
+    delay=$(( RATE_LIMIT_WAIT * (1 << try) ))
+    [ -n "$OC_RETRY_S" ] && [ "$OC_RETRY_S" -gt "$delay" ] && delay=$OC_RETRY_S
+    delay=$(( delay + RANDOM % 10 )); try=$((try + 1))   # a little jitter so parallel runs do not retry in step
+    note "$tag hit a short rate limit on $model ($OC_ERR); waited ${delay}s and $([ -n "$EV_SESSION" ] && echo "continued the session" || echo "started it again") (retry $try of $RATE_LIMIT_RETRIES)"
+    keep="$RUN_PREFIX-$tag-limited$try"; mkdir -p "$keep"
+    for f in "$ev" "$ev".*; do [ -e "$f" ] && mv "$f" "$keep/"; done
+    sleep "$delay"
+    if [ -n "$EV_SESSION" ]; then
+      local again="Continue the task from exactly where you stopped; do not start over."
+      # Only the continued run's last message is read, so a reviewer must repeat its whole answer.
+      case "$tag" in review*) again="Finish your review, then output your complete review again in the required format, including every finding from before the interruption." ;; esac
+      OC_CONTINUE="$EV_SESSION" oc_start "$WT" "$tag" "$agent" "$model" "$effort" "You were interrupted by a temporary rate limit. $again"
+    else
+      oc_start "$WT" "$@"
+    fi
+    rc=$?
+  done
 }
 
 report_status() { grep -oiE 'STATUS[^A-Za-z]{0,6}(DONE|STOPPED)' "$1" 2>/dev/null | head -1 | grep -oiE 'DONE|STOPPED' | tr '[:lower:]' '[:upper:]'; }
@@ -367,8 +433,7 @@ run_worker() {
   { [ "$tag" != worker ] && printf '\n--- %s ---\n' "$tag"; cat "$ROUND_REPORT"; } >> "$REPORT"
   if [ $ok -ne 0 ]; then
     if [ "$OC_LIMIT" = 1 ]; then
-      pause_model "$WORKER_MODEL" "$OC_ERR"
-      finish ERROR "usage limit for $WORKER_MODEL: $OC_ERR. Runs for this model are paused; run \`worker.sh resume\` once the limit resets"
+      finish ERROR "$([ "$OC_LIMIT_KIND" = long ] && echo "usage limit" || echo "rate limit that outlasted every retry") for $WORKER_MODEL: ${OC_ERR%.}. Runs for this model are $(limit_pause "$WORKER_MODEL")"
     fi
     finish ERROR "the $tag run did not complete: $OC_ERR"
   fi
@@ -465,7 +530,7 @@ run_blackbox() {
   if [ "$BB_STATUS" = running ]; then
     wait "$TESTER_PID"; rc=$?; TESTER_PID=""
     if ! oc_collect "$TWT" tests "$TESTER_MODEL" "$TESTER_EFFORT" "$rc"; then
-      [ "$OC_LIMIT" = 1 ] && pause_model "$TESTER_MODEL" "$OC_ERR"
+      [ "$OC_LIMIT_KIND" = long ] && limit_pause "$TESTER_MODEL" >/dev/null   # a short limit only skips these tests
       BB_STATUS="missing"; note "black-box tester did not finish: $OC_ERR"; return 0
     fi
     if [ ! -s "$TWT/$BLACKBOX_DIR/RUN" ]; then
@@ -504,7 +569,9 @@ cmd_run() {
   local since; since="$(paused_since "$WORKER_MODEL")"
   if [ -n "$since" ]; then
     echo "RESULT: ERROR"
-    echo "reason: paused: $WORKER_MODEL hit its usage limit at $since. Run \`worker.sh resume\` once the limit resets, then dispatch again."
+    local until; until="$(paused_until "$WORKER_MODEL")"
+    if [ -n "$until" ]; then echo "reason: paused: $WORKER_MODEL hit a limit at $since; the pause ends on its own at $(fmt_time "$until"). Dispatch again after that, or run \`worker.sh resume\` sooner."
+    else echo "reason: paused: $WORKER_MODEL hit its usage limit at $since. Run \`worker.sh resume\` once the limit resets, then dispatch again."; fi
     exit 3
   fi
   PLAN_DIR="$ROOT/$STATE/$FEATURE"; PLAN="$PLAN_DIR/plan.md"; BRIEF="$PLAN_DIR/briefs/$ID.md"; LOG="$PLAN_DIR/runs.log"
@@ -565,13 +632,13 @@ cmd_run() {
     oc_session review shikigami-reviewer "$rmodel" "$REVIEWER_EFFORT" "$rmsg" \
       "$INPUT_DIR/brief.md" "$INPUT_DIR/change.diff" "$INPUT_DIR/report.md" && reviewed=0
     if [ $reviewed -ne 0 ]; then
-      [ "$OC_LIMIT" = 1 ] && pause_model "$rmodel" "$OC_ERR"
+      [ "$OC_LIMIT" = 1 ] && limit_pause "$rmodel" >/dev/null
       local fb="${REVIEWER_FALLBACK_MODEL:-}"
       if [ -n "$fb" ] && [ "$fb" != "$rmodel" ] && [ -z "$(paused_since "$fb")" ]; then
         note "reviewer $rmodel failed ($OC_ERR); retried with $fb"
         oc_session review-fallback shikigami-reviewer "$fb" "$REVIEWER_EFFORT" "$rmsg" \
           "$INPUT_DIR/brief.md" "$INPUT_DIR/change.diff" "$INPUT_DIR/report.md" && reviewed=0
-        [ $reviewed -ne 0 ] && [ "$OC_LIMIT" = 1 ] && pause_model "$fb" "$OC_ERR"
+        [ $reviewed -ne 0 ] && [ "$OC_LIMIT" = 1 ] && limit_pause "$fb" >/dev/null
       fi
     fi
   else

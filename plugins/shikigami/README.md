@@ -106,6 +106,9 @@ Settings are read in this order, and the last one wins: the plugin's defaults, t
 | `WORKER_TIMEOUT` | `7200` | Seconds before a hung OpenCode run is stopped |
 | `ACCEPT_TIMEOUT` | `900` | Seconds for each acceptance command and the black-box test run |
 | `FAIL_TAIL_LINES` | `40` | Lines of failure output shown to Opus |
+| `RATE_LIMIT_RETRIES` | `4` | Times a run waits and continues after a short rate limit |
+| `RATE_LIMIT_WAIT` | `30` | Seconds before the first retry; each later wait doubles |
+| `RATE_LIMIT_MAX_WAIT` | `900` | A limit with a longer wait than this pauses the model instead of waiting |
 | `OPENCODE_BIN` | `opencode` | OpenCode command, if it is not on your `PATH` |
 | `OPENCODE_RUN_FLAGS` | `--standalone` | Extra flags for every `opencode` call |
 
@@ -143,6 +146,21 @@ Do not edit the files in `~/.config/opencode/agents/`: they are rewritten before
 
 Your copy wins over the plugin's file from then on, including after plugin updates, so you will not get later changes to that agent until you merge them in yourself. Delete your copy to go back to the plugin's version.
 
+## Rate and usage limits
+
+OpenCode reports a limit as an HTTP 429 error, usually with the time to wait (`retryAfterMs`). Shikigami reads that and handles two cases:
+
+- **A short rate limit** (a wait of `RATE_LIMIT_MAX_WAIT` seconds or less, or no wait and no sign the allowance ran out): the run waits and then continues the same OpenCode session, so the work done so far is kept. Waits start at `RATE_LIMIT_WAIT` seconds and double (30, 60, 120, 240), or follow OpenCode's wait when it is longer. Each wait is listed in the summary. If the limit is still there after `RATE_LIMIT_RETRIES` tries, the model is paused for `RATE_LIMIT_MAX_WAIT` seconds.
+- **A used-up allowance or a long wait** (for example the free tier's "Free usage limit reached", which comes with a wait of hours): the model is paused, so queued runs fail fast instead of each hitting the limit. The pause ends on its own at the time OpenCode gave. If OpenCode gave no time, run `worker.sh resume` once the limit resets.
+
+`worker.sh doctor` lists every active pause and when it ends, and `worker.sh resume` lifts one sooner. The black-box tester is not retried: a short limit only skips its tests for that brief.
+
+Waiting adds to a run's time, and the run keeps its `MAX_PARALLEL` slot while it waits. `WORKER_TIMEOUT` applies to each attempt, not to the waits, so a run that hits several limits can take well over `WORKER_TIMEOUT` in total. The summary lists every wait.
+
+OpenCode itself already retries a rate-limited request, about 11 times over roughly 90 seconds, so Shikigami's waits only start when OpenCode has given up. It never retries a used-up allowance (`GoUsageLimitError`, `FreeUsageLimitError`); for those, its wait counts down to when the 5-hour, weekly or monthly window resets.
+
+OpenCode publishes per-model dollar allowances for Go (see the [Go docs](https://opencode.ai/docs/go/)) but no per-minute or concurrency limit. A 429 saying "retry after a brief wait" means the model's provider is short of capacity, not that your allowance is used up (an OpenCode maintainer says so in [anomalyco/opencode#47634](https://github.com/anomalyco/opencode/issues/47634)), so expect the occasional wait, especially on Muse Spark Contributor. The free tier is limited per network address and shared by all the free models.
+
 ## Safety
 
 - **Workers are offline**, except for [Context7](https://context7.com) library documentation. OpenCode's Code Mode is off, and the shell blocks `curl`, `wget`, PowerShell web commands and package installs. This is best effort: a script that makes its own web request can still get through, so the worker's instructions also forbid it.
@@ -169,13 +187,13 @@ Everything lives in `.shikigami/` and a few worktree-only names, all excluded th
 | `worker.sh run <feature> <n> [--effort max]` | Runs one brief and prints its summary |
 | `worker.sh cleanup <feature> <n>` | Removes a brief's worktree and branch |
 | `worker.sh plan-miss <feature> <n> "<note>"` | Records something the plan should have covered |
-| `worker.sh resume [model]` | Lifts the pause after a model's usage limit resets |
+| `worker.sh resume [model]` | Lifts a usage-limit pause now, instead of waiting for it to end on its own |
 | `worker.sh config` | Creates your settings file and prints its path |
 | `worker.sh config agent <name>` | Copies an agent file to your settings folder so you can change it |
 
 ## Known limits
 
-- The free OpenCode tier runs out quickly with several workers. When a model hits its limit, Shikigami pauses runs for that model instead of letting each one fail.
+- The free OpenCode tier runs out quickly with several workers, and its allowance is shared by all the free models. See "Rate and usage limits" for what Shikigami does when a limit is hit.
 - OpenCode 2.1 offers MCP tools to custom agents only through Code Mode, which Shikigami keeps off, so Context7 is used through its web API instead of as an MCP server.
 - Quality depends on the plan. Workers trust the plan's facts, so the skill tells Opus to check runtime and platform claims with an experiment before writing them into a brief.
 
