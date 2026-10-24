@@ -7,6 +7,7 @@
 #   worker.sh plan-miss <feature> <brief> "<note>"   record something the plan should have covered
 #   worker.sh resume [model]                         lift a usage-limit pause (all models, or one)
 #   worker.sh config                                 create your settings file and print its path
+#   worker.sh config agent <worker|reviewer|tester>  copy an agent file to your settings folder to change it
 #
 # Run from the main checkout of the repo. Exit codes for run: 0 PASS, 1 FAIL, 2 STOPPED, 3 ERROR.
 set -uo pipefail
@@ -30,7 +31,7 @@ LIMIT_PATTERN='usage limit|rate limit|quota|too many requests|insufficient (cred
 native() { if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s\n' "$1"; fi; }
 unixpath() { if command -v cygpath >/dev/null 2>&1; then cygpath -u "$1"; else printf '%s\n' "$1"; fi; }
 lib() { node "$(native "$SKILL_DIR/lib.mjs")" "$@"; }
-usage() { sed -n '3,10p' "$SKILL_DIR/worker.sh"; }
+usage() { sed -n '3,11p' "$SKILL_DIR/worker.sh"; }
 need() { [ -n "${1:-}" ] || { echo "RESULT: ERROR"; echo "reason: missing argument: $2"; usage; exit 3; }; }
 # safe_name <value> <what>: feature and brief names become paths and branch names, so no slashes or "..".
 safe_name() {
@@ -76,11 +77,17 @@ ensure_excludes() {
   for p in "${EXCLUDES[@]}"; do grep -qxF "$p" "$exc" || printf '%s\n' "$p" >> "$exc"; done
 }
 
+# Agent files the user changed live in ~/.config/shikigami/agents/ and replace the plugin's file of the same name.
+# The copies in OpenCode's agents folder are overwritten on every run, so edits made there do not last.
+USER_AGENTS="$(dirname "$USER_CONF")/agents"
+
 sync_agents() {
-  local dst="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/agents" f
-  mkdir -p "$dst"
+  local dst="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/agents" f src
+  mkdir -p "$dst"; AGENT_OVERRIDES=""
   for f in "$SKILL_DIR"/opencode-agents/*.md; do
-    cmp -s "$f" "$dst/$(basename "$f")" || cp "$f" "$dst/"
+    src="$USER_AGENTS/$(basename "$f")"
+    if [ -f "$src" ]; then AGENT_OVERRIDES="$AGENT_OVERRIDES $(basename "$f" .md)"; else src="$f"; fi
+    cmp -s "$src" "$dst/$(basename "$f")" || cp "$src" "$dst/$(basename "$f")"
   done
 }
 
@@ -165,6 +172,15 @@ cmd_resume() {
 # ---------- doctor / config ----------
 
 cmd_config() {
+  # config agent <worker|reviewer|tester>: copy that agent file to the user's folder to edit it there.
+  if [ "${1:-}" = agent ]; then
+    local name="shikigami-${2:-}.md"
+    [ -f "$SKILL_DIR/opencode-agents/$name" ] || { echo "usage: worker.sh config agent <worker|reviewer|tester>"; exit 3; }
+    mkdir -p "$USER_AGENTS"
+    [ -f "$USER_AGENTS/$name" ] || cp "$SKILL_DIR/opencode-agents/$name" "$USER_AGENTS/$name"
+    echo "$USER_AGENTS/$name (edit this copy; delete it to go back to the plugin's version)"
+    return 0
+  fi
   if [ ! -f "$USER_CONF" ]; then
     mkdir -p "$(dirname "$USER_CONF")"
     sed 's/^\([A-Z_]*\)=/# \1=/' "$SKILL_DIR/shikigami.conf" > "$USER_CONF"
@@ -204,7 +220,7 @@ cmd_doctor() {
   [ -d "$SKILL_DIR/opencode-agents" ] || problems+=("missing $SKILL_DIR/opencode-agents")
   if [ ${#problems[@]} -eq 0 ]; then
     sync_agents
-    echo "OK (OpenCode $(oc_version); worker $WORKER_MODEL at $WORKER_EFFORT; reviewer $REVIEWER_MODEL at $REVIEWER_EFFORT; black-box tester ${TEST_WRITER}; max $MAX_PARALLEL parallel)"
+    echo "OK (OpenCode $(oc_version); worker $WORKER_MODEL at $WORKER_EFFORT; reviewer $REVIEWER_MODEL at $REVIEWER_EFFORT; black-box tester ${TEST_WRITER}; max $MAX_PARALLEL parallel${AGENT_OVERRIDES:+; your agent files:$AGENT_OVERRIDES})"
   else
     printf 'PROBLEM: %s\n' "${problems[@]}"
     return 1

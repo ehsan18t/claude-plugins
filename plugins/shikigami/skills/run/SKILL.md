@@ -12,7 +12,7 @@ Paths used below:
 - `FEATURE` = a short kebab-case name for the feature, e.g. `invoice-export`.
 - State folder = `.shikigami/` at the repo root: plans, briefs, run logs and worktrees. `worker.sh` excludes it through `.git/info/exclude`; never add it to `.gitignore`.
 
-If the user invoked this skill with only the word `config`, run `bash "$SKILL_DIR/worker.sh" config`, show them the settings file path it prints and the settings table in `SKILL_DIR/../../README.md`, and stop. With only the word `doctor`, run `worker.sh doctor`, show the result, and stop.
+If the user invoked this skill with only the word `config`, run `bash "$SKILL_DIR/worker.sh" config`, show them the settings file path it prints and the settings table in `SKILL_DIR/../../README.md`, and stop. With `config agent <worker|reviewer|tester>`, run `worker.sh config agent <name>`, show the path it prints and the "Change what an agent can use" steps from the README, and stop. With only the word `doctor`, run `worker.sh doctor`, show the result, and stop.
 
 ## 1. Preflight
 

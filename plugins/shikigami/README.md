@@ -52,25 +52,84 @@ and describe the feature. The first step runs `worker.sh doctor`, which checks y
 
 ## Configuration
 
-The defaults are in `skills/run/shikigami.conf`. Do not edit that file, because plugin updates replace it. Create your own settings file instead, from Claude Code:
+### Where everything lives
 
-```
-/shikigami:run config
-```
+| What | Where | Edit it? |
+|---|---|---|
+| Your settings | `~/.config/shikigami/shikigami.conf` (Windows: `C:\Users\<you>\.config\shikigami\shikigami.conf`) | Yes |
+| Your agent files | `~/.config/shikigami/agents/shikigami-<worker\|reviewer\|tester>.md` | Yes |
+| Defaults | `skills/run/shikigami.conf` inside the plugin | No, plugin updates replace it |
+| Agents OpenCode loads | `~/.config/opencode/agents/shikigami-*.md` | No, rewritten before every run |
+| OpenCode config for runs | `.shikigami/opencode.jsonc` in your repo | No, rewritten before every run |
 
-That writes `~/.config/shikigami/shikigami.conf` with every setting commented out. Uncomment what you change. An environment variable of the same name beats both files.
+If `XDG_CONFIG_HOME` is set, it replaces `~/.config` in these paths.
+
+### Change a setting
+
+1. Create your settings file. In Claude Code, run `/shikigami:run config`. It writes `~/.config/shikigami/shikigami.conf` with every setting commented out, and prints the path. If the file already exists, it only prints the path.
+2. Open the file, remove the `#` in front of each setting you want to change, and edit its value. For example, to switch to OpenCode Go after subscribing, run `opencode models`, find the Go IDs for DeepSeek V4.1 Flash and GLM-5.3 Flash, and set:
+
+   ```bash
+   WORKER_MODEL="<Go ID for DeepSeek V4.1 Flash>"
+   REVIEWER_MODEL="<Go ID for GLM-5.3 Flash>"
+   ```
+
+   Leave out the `#effort` part of the ID; the effort settings add it.
+3. That's it. Every `worker.sh` call reads the file, so the next run uses the new value without a restart. Run `/shikigami:run doctor` to confirm: it prints the models, efforts and limits it will use.
+
+Settings are read in this order, and the last one wins: the plugin's defaults, then your settings file, then an environment variable of the same name. An environment variable is handy for a one-off change, but it must be set in the shell you start Claude Code from.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `WORKER_MODEL` | `opencode/deepseek-v4.1-flash-free` | Worker model. On Go, run `opencode models` and use the Go ID. |
+| `WORKER_MODEL` | `opencode/deepseek-v4.1-flash-free` | Worker model, without the `#effort` part |
 | `WORKER_EFFORT` | `high` | Worker effort. Retries use `max`. |
 | `REVIEWER_MODEL` | `opencode/glm-5.3-flash-free` | Second-pass reviewer |
 | `REVIEWER_EFFORT` | `max` | Reviewer effort |
 | `REVIEWER_FALLBACK_MODEL` | the worker model | Used when the reviewer fails or hits its limit; empty for none |
 | `TEST_WRITER` | `off` | `on` adds the black-box tester (more quota, more independent tests) |
-| `MAX_PARALLEL` | `8` | Workers running at once |
+| `TESTER_MODEL` | the reviewer model | Black-box tester model |
+| `TESTER_EFFORT` | `high` | Black-box tester effort |
+| `MAX_PARALLEL` | `8` | Workers running at once; extra runs wait for a free slot |
 | `EXTRA_EDIT_MAX_FILES` | `2` | Files a worker may change outside its brief, with proof |
-| `WORKER_TIMEOUT` | `7200` | Seconds before a hung run is stopped |
+| `WORKER_TIMEOUT` | `7200` | Seconds before a hung OpenCode run is stopped |
+| `ACCEPT_TIMEOUT` | `900` | Seconds for each acceptance command and the black-box test run |
+| `FAIL_TAIL_LINES` | `40` | Lines of failure output shown to Opus |
+| `OPENCODE_BIN` | `opencode` | OpenCode command, if it is not on your `PATH` |
+| `OPENCODE_RUN_FLAGS` | `--standalone` | Extra flags for every `opencode` call |
+
+## What the OpenCode agents can use
+
+Shikigami installs three OpenCode agents. Each one's permissions are the rules at the top of its file in `skills/run/opencode-agents/`.
+
+| | Worker | Reviewer | Black-box tester |
+|---|---|---|---|
+| Read files in its worktree | Yes, except `.env` files | Yes, except `.env` files | Yes, except `.env` files |
+| Edit files | Yes, in its worktree | No | Only in `.shikigami-blackbox/` |
+| Run shell commands | Yes, except git history commands (commit, reset, checkout, push, and so on), `curl`, `wget`, PowerShell web commands and package installs | No | Same as the worker |
+| Web | Context7 only | Context7 and 32 documentation, issue-tracker and package-registry sites | Context7 only |
+| Web search, Code Mode, subagents, skills, asking you questions | No | No | No |
+| Files outside its worktree | No | No | No |
+
+**Context7** ([context7.com](https://context7.com)) gives up-to-date library documentation. The agents reach it through web fetches to `https://context7.com/api/v2/`, not as an MCP server, because OpenCode 2.1 gives custom agents MCP tools only through Code Mode, and Code Mode is off (it can fetch any site). It works without an account, at a lower rate limit.
+
+**Formatters:** the run config turns on OpenCode's formatters, which only run when your repo already has one set up (Prettier or Biome, for example).
+
+**MCP servers and OpenCode plugins:** Shikigami adds none. OpenCode merges its config files, so your global OpenCode config (`~/.config/opencode/opencode.json`) and the repo's own `opencode.json` and `.opencode/` folder still load during runs. MCP servers from them stay out of reach, because Code Mode is off. OpenCode plugins and custom tools from them do load, and Shikigami's rules do not cover them, so check what you have installed before you run it on a repo that has its own `.opencode/` folder.
+
+### Change what an agent can use
+
+Do not edit the files in `~/.config/opencode/agents/`: they are rewritten before every run. Make your own copy instead:
+
+1. In Claude Code, run `/shikigami:run config agent reviewer` (or `worker`, or `tester`). It copies the plugin's file to `~/.config/shikigami/agents/` and prints the path.
+2. Edit the rules at the top of that copy. Each rule has an `action`, a `resource` pattern and an `effect` (`allow` or `deny`). When several rules match, the last one wins, so keep the `deny` for `"*"` first and put allow rules after it. For example, to let the reviewer read another documentation site:
+
+   ```yaml
+   - {action: webfetch, resource: "https://docs.example.com/*", effect: allow}
+   ```
+
+3. Run `/shikigami:run doctor`. It installs your copy and lists it under "your agent files".
+
+Your copy wins over the plugin's file from then on, including after plugin updates, so you will not get later changes to that agent until you merge them in yourself. Delete your copy to go back to the plugin's version.
 
 ## Safety
 
@@ -99,7 +158,8 @@ Everything lives in `.shikigami/` and a few worktree-only names, all excluded th
 | `worker.sh cleanup <feature> <n>` | Removes a brief's worktree and branch |
 | `worker.sh plan-miss <feature> <n> "<note>"` | Records something the plan should have covered |
 | `worker.sh resume [model]` | Lifts the pause after a model's usage limit resets |
-| `worker.sh config` | Creates your settings file |
+| `worker.sh config` | Creates your settings file and prints its path |
+| `worker.sh config agent <name>` | Copies an agent file to your settings folder so you can change it |
 
 ## Known limits
 
